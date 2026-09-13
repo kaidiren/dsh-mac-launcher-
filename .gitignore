@@ -1,0 +1,10 @@
+# 构建产物
+.build/
+build/
+
+# Swift 模块缓存
+.module-cache/
+
+# 日志与运行期状态（认证 URL 是本机凭据，绝不入库）
+*.log
+auth-url
