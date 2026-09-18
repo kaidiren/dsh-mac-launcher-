@@ -302,7 +302,9 @@ final class ServiceController {
         restartInFlight = true
         defer { restartInFlight = false }
         logInfo("重启服务：停止 → 拉起")
-        await stop()
+        // force：端口上的服务即便不是本启动器拉起的也要停掉 ——
+        // 「重启服务」的语义就是"把这个端口上的服务重启掉"，而不是"只重启我认识的那个"。
+        await stop(force: true)
         // 等端口真正释放，否则紧接着的启动会以为服务还在而直接复用
         let deadline = Date().addingTimeInterval(config.stopTimeout)
         while Date() < deadline, isListening {
@@ -318,11 +320,19 @@ final class ServiceController {
         try await launch()
     }
 
-    /// 停止服务。只对自己拉起的进程动手；别人启动的服务不碰。
-    func stop() async {
+    /// 停止服务。
+    ///
+    /// 默认只对自己拉起的进程动手 —— 「退出 DSH」走这条：退掉自己的东西，不误杀别人在跑的服务。
+    /// `force: true` 时连"不是本启动器启动的服务"也一起停：菜单栏「重启服务」走这条，
+    /// 那个动作的语义就是"把端口上的服务重启掉"，哪怕它当初是别处启动的。
+    func stop(force: Bool = false) async {
         guard let task = process else {
-            logInfo("服务不是本启动器启动的，跳过停止（避免误杀他用进程）")
-            state = .idle
+            guard force else {
+                logInfo("服务不是本启动器启动的，跳过停止（避免误杀他用进程）")
+                state = .idle
+                return
+            }
+            await forceStopByPort()
             return
         }
         guard task.isRunning else {
@@ -360,6 +370,48 @@ final class ServiceController {
         authenticatedURL = nil
         state = .idle
         logInfo("服务已停止")
+    }
+
+    /// 强制停止"端口上那个服务"，不管它是谁拉起的。
+    ///
+    /// 没有子进程句柄时只能按端口反查监听者（lsof -t）再动手：SIGTERM → 宽限 3 秒 →
+    /// SIGKILL，最后确认端口是否真的释放。这会打断正在使用该服务的会话，
+    /// 所以只在用户显式点「重启服务」时才走这条路。
+    private func forceStopByPort() async {
+        var pids = Self.listeningPIDs(port: config.port)
+        guard !pids.isEmpty else {
+            logInfo("端口 \(config.port) 上没有监听进程，无需停止")
+            state = .idle
+            return
+        }
+        logInfo("强制停止端口 \(config.port) 上的服务（pid=\(pids.map(String.init).joined(separator: ","))；非本启动器启动）")
+        for pid in pids { kill(pid, SIGTERM) }
+
+        var deadline = Date().addingTimeInterval(3.0)
+        while Date() < deadline, !Self.listeningPIDs(port: config.port).isEmpty {
+            try? await Task.sleep(nanoseconds: 100_000_000)
+        }
+        pids = Self.listeningPIDs(port: config.port)
+        if !pids.isEmpty {
+            logInfo("SIGTERM 后 3 秒仍占用端口，发送 SIGKILL（pid=\(pids.map(String.init).joined(separator: ","))）")
+            for pid in pids { kill(pid, SIGKILL) }
+            deadline = Date().addingTimeInterval(2.0)
+            while Date() < deadline, !Self.listeningPIDs(port: config.port).isEmpty {
+                try? await Task.sleep(nanoseconds: 100_000_000)
+            }
+        }
+        let left = Self.listeningPIDs(port: config.port)
+        if left.isEmpty {
+            logInfo("服务已停止（端口 \(config.port) 已释放）")
+        } else {
+            logInfo("警告：端口 \(config.port) 仍被占用（pid=\(left.map(String.init).joined(separator: ","))；可能是权限不足，请在终端手动处理）")
+        }
+        cleanupPipes()
+        process = nil
+        AuthCache.clear(config.authCachePath)
+        try? FileManager.default.removeItem(at: config.serviceStatePath)
+        authenticatedURL = nil
+        state = .idle
     }
 
     // MARK: - 服务进程归属（识别自己留下的服务）

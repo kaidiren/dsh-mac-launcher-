@@ -102,7 +102,7 @@ final class MenuBar: NSObject, NSMenuDelegate {
         let menu = NSMenu()
         menu.autoenablesItems = false
 
-        // 状态行：同时说清服务归属。用户据此就能明白为什么「重启服务」不可用。
+        // 状态行：说清服务归属（外部启动的服务，重启时会先被强制停掉）。
         let header = NSMenuItem(title: statusLine(), action: nil, keyEquivalent: "")
         header.isEnabled = false
         menu.addItem(header)
@@ -119,22 +119,15 @@ final class MenuBar: NSObject, NSMenuDelegate {
         menu.addItem(reload)
 
         menu.addItem(.separator())
-        // 重启的可用范围：
-        //   · 自己启动的服务 → 正常重启；
-        //   · 本启动器此前留下、现已成孤儿的服务 → 接管（否则它会一直占着端口又认证不了）；
-        //   · 真正的外来服务 → 禁用，重启它会打断正在使用它的会话。
-        let owned = service.ownsProcess
-        let orphaned = !owned && service.isOurOrphanedService()
-        let restart = NSMenuItem(title: orphaned ? "接管服务" : "重启服务",
-                                 action: #selector(restartService),
-                                 keyEquivalent: "R")
+        // 「重启服务」无条件可用：它的语义是"把端口上的服务重启掉"，
+        // 哪怕那个服务不是本启动器拉起的 —— 先强制停掉，再重新拉起。
+        // 唯一例外是动作正在进行中（busy），避免重入。
+        let restart = NSMenuItem(title: "重启服务", action: #selector(restartService), keyEquivalent: "R")
         restart.target = self
-        restart.isEnabled = (owned || orphaned) && !service.state.isBusy
-        if !owned && !orphaned {
-            restart.toolTip = "该服务不是本启动器启动的，重启它会打断正在使用它的会话"
-        } else if orphaned {
-            restart.toolTip = "这是本启动器此前留下、仍在运行的服务：接管它以便重新获得认证"
-        }
+        restart.isEnabled = !service.state.isBusy
+        restart.toolTip = service.ownsProcess
+            ? "停止并重新拉起端口 \(config.port) 上的 dsh web"
+            : "端口 \(config.port) 上的服务不是本启动器启动的：重启会先强制停掉它再重新拉起（会打断正在使用它的会话）"
         menu.addItem(restart)
 
         let quit = NSMenuItem(title: "退出 DSH", action: #selector(quitAll), keyEquivalent: "q")
@@ -170,14 +163,11 @@ final class MenuBar: NSObject, NSMenuDelegate {
     }
 
     @objc private func restartService() {
-        // 双保险：菜单项对外来服务已禁用，这里再确认一次，
-        // 因为"重启别人的服务"会打断正在使用它的会话。
-        guard service.ownsProcess || service.isOurOrphanedService() else {
-            logInfo("菜单栏：重启服务被拒绝——该服务不是本启动器启动的")
-            window.showExternalServiceNotice()
-            return
-        }
-        logInfo(service.ownsProcess ? "菜单栏：重启服务" : "菜单栏：接管遗留服务")
+        // 不再按归属设限：用户要的就是"把这个端口上的服务重启掉"。
+        // 非本启动器拉起的服务会先被强制停止（可能打断正在使用它的会话），日志里会写明。
+        logInfo(service.ownsProcess
+                ? "菜单栏：重启服务"
+                : "菜单栏：重启服务（端口上的服务非本启动器启动，将强制停止后重新拉起）")
         window.restartService()
     }
 

@@ -57,6 +57,11 @@ final class WebWindow: NSObject, NSWindowDelegate, WKNavigationDelegate, WKUIDel
     /// 在界面就绪时汇总成一行"启动耗时"日志（见 logStartupTiming）。
     private var windowShownAt: Date?
     private var serviceReadyAt: Date?
+    /// 页面缩放（1.0 = 100%）。用户用 ⌘+ / ⌘- 调过的值记在 UserDefaults，重启后仍生效。
+    private(set) var pageZoom: Double = 1.0
+    private static let pageZoomKey = "pageZoom"
+    private static let minZoom = 0.5
+    private static let maxZoom = 3.0
     /// 服务最近一行输出，用于让等待过程"看得见"
     private var lastServiceLine = ""
     /// 前端就绪轮询的中间状态。
@@ -79,24 +84,26 @@ final class WebWindow: NSObject, NSWindowDelegate, WKNavigationDelegate, WKUIDel
         super.init()
         buildWindow()
         prewarmWebKit()
+        restorePageZoom()
     }
 
-    /// 预热 WebKit 子进程。
+    /// 预热 WebKit 子进程（只建进程，不碰网络）。
     ///
-    /// 只创建一个 WKWebView 并不会拉起 WebKit 的网络/渲染进程 —— 要等真正发起加载才会。
-    /// 而主流程此刻还要解析配置、等端口、等 token，中间白等好几秒。这里先用一个不显示、
-    /// 不挂 delegate 的 WebView 去请求根地址，把这几个子进程（连同到本机服务的连接与
-    /// HTTP 缓存）提前热起来；它和窗口里那个 WebView 共用同一个 websiteDataStore，
-    /// 所以预热期间拿到的 cookie / 缓存对主加载同样有效。
+    /// 只创建一个 WKWebView 并不会拉起 WebKit 的 WebContent/GPU 子进程 —— 要等真正发起
+    /// 加载才会。而主流程此刻还要解析配置、等端口、等 token，中间白等好几秒；这里先加载
+    /// 一个空页面，把这几个子进程提前热起来。
     ///
-    /// 服务还没起来时这次请求会失败 —— 没关系，它不显示，也没人处理它的错误。
+    /// **不要改成请求 config.rootURL**：那会引入竞态 —— 若这一下恰好吃在"服务已 bind
+    /// 端口、HTTP 还没就绪"的窗口期，TCP 握手成功而 HTTP 迟迟不响应，这个挂住的请求会
+    /// 占住同 origin 的连接池，把主 WebView 的加载一起拖住（实测表现：界面空白 0 字符、
+    /// 26 秒才兜底就绪）。
     private func prewarmWebKit() {
         let configuration = WKWebViewConfiguration()
         configuration.websiteDataStore = .default()
         configuration.userContentController.addUserScript(Polyfill.script())
         let view = WKWebView(frame: .zero, configuration: configuration)
         prewarmView = view
-        view.load(URLRequest(url: config.rootURL))
+        view.loadHTMLString("<!doctype html><meta charset=\"utf-8\"><title>DSH</title>", baseURL: nil)
     }
 
     // MARK: - 窗口构建
@@ -181,6 +188,30 @@ final class WebWindow: NSObject, NSWindowDelegate, WKNavigationDelegate, WKUIDel
         if window.isMiniaturized { window.deminiaturize(nil) }
         // 只在首次记录：之后从菜单栏/Dock 再打开窗口不算"启动"
         if windowShownAt == nil { windowShownAt = Date() }
+    }
+
+    // MARK: - 页面缩放（菜单「显示」里的 ⌘+ / ⌘- / ⌘0）
+
+    /// 应用初始缩放：优先"上次调过的值"，其次配置项 DSH_PAGE_ZOOM，最后 100%。
+    private func restorePageZoom() {
+        let saved = UserDefaults.standard.object(forKey: Self.pageZoomKey) as? Double
+        pageZoom = min(max(saved ?? config.pageZoom, Self.minZoom), Self.maxZoom)
+        webView.pageZoom = pageZoom
+        if abs(pageZoom - 1.0) > 0.001 {
+            logInfo("页面缩放：\(Int((pageZoom * 100).rounded()))%（沿用上次的值）")
+        }
+    }
+
+    func zoomIn() { setPageZoom(pageZoom + 0.1) }
+    func zoomOut() { setPageZoom(pageZoom - 0.1) }
+    func resetZoom() { setPageZoom(1.0) }
+
+    /// 步进 0.1、范围 50%–300%（与 Chrome 的档位观感一致），并把值记住。
+    private func setPageZoom(_ value: Double) {
+        pageZoom = min(max(value, Self.minZoom), Self.maxZoom)
+        webView.pageZoom = pageZoom
+        UserDefaults.standard.set(pageZoom, forKey: Self.pageZoomKey)
+        logInfo("页面缩放：\(Int((pageZoom * 100).rounded()))%")
     }
 
     /// 开启主流程：先让窗口和转圈动起来，再拉起服务、加载界面。
@@ -270,6 +301,12 @@ final class WebWindow: NSObject, NSWindowDelegate, WKNavigationDelegate, WKUIDel
     /// 真正的加载逻辑。重启流程在拿到新 token 后直接调它
     /// （那时 `restarting` 仍为 true，所以不能走 loadHome 的拦截）。
     private func performLoad() {
+        // 每次发起加载都回到"未就绪"状态。
+        // 这一步不能省：hasLoadedPage 在首次就绪时被置为 true，且不会自己复位；重启服务
+        // （以及任何重新加载）走的正是这条路径，若不在这里清掉，didFinish 触发的
+        // pollReadiness 会被它的 guard 直接挡回、finishReadiness 永不执行 ——
+        // 表现就是"重启后卡在加载界面"（遮罩撤不掉）。
+        hasLoadedPage = false
         if config.showStartupOverlay, !finishedOnce {
             overlay.show(message: "正在加载界面…")
         }

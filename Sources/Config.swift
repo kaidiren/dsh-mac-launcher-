@@ -41,6 +41,9 @@ struct LauncherConfig {
     var showStartupOverlay: Bool = true
     /// 用无边距沉浸式窗口（隐藏标题栏），观感更接近原生应用。
     var immersiveWindow: Bool = false
+    /// 页面缩放（对应 Chrome 的"页面缩放"，不是手势那种浮层放大）。
+    /// 只作为**首次运行**的初值：之后用户在窗口里 ⌘+ / ⌘- 调过的值会被记住并优先。
+    var pageZoom: Double = 1.0
 
     // MARK: 文件位置
     var logDirectory: URL = LauncherConfig.defaultLogDirectory()
@@ -130,6 +133,7 @@ struct LauncherConfig {
         config.openWindowOnLaunch = boolValue("DSH_OPEN_WINDOW", true)
         config.showStartupOverlay = boolValue("DSH_STARTUP_OVERLAY", true)
         config.immersiveWindow = boolValue("DSH_IMMERSIVE_WINDOW", false)
+        config.pageZoom = doubleValue("DSH_PAGE_ZOOM", 1.0)
 
         let logDir = value("DSH_LOG_DIR", "\(homeDirectory)/Library/Logs/DSH")
         config.logDirectory = URL(fileURLWithPath: (logDir as NSString).expandingTildeInPath)

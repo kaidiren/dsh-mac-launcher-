@@ -207,6 +207,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         editMenuItem.submenu = editMenu
         mainMenu.addItem(editMenuItem)
 
+        // 显示菜单：页面缩放。对应 Chrome 的 ⌘+ / ⌘- / ⌘0 ——
+        // 注意这是"页面整体缩放"（布局按比例放大），不是手势那种浮层放大。
+        let viewMenuItem = NSMenuItem()
+        let viewMenu = NSMenu(title: "显示")
+        let zoomIn = NSMenuItem(title: "放大", action: #selector(zoomInAction), keyEquivalent: "+")
+        zoomIn.target = self
+        viewMenu.addItem(zoomIn)
+        let zoomOut = NSMenuItem(title: "缩小", action: #selector(zoomOutAction), keyEquivalent: "-")
+        zoomOut.target = self
+        viewMenu.addItem(zoomOut)
+        let zoomReset = NSMenuItem(title: "实际大小", action: #selector(zoomResetAction), keyEquivalent: "0")
+        zoomReset.target = self
+        viewMenu.addItem(zoomReset)
+        viewMenuItem.submenu = viewMenu
+        mainMenu.addItem(viewMenuItem)
+
         // 窗口菜单
         let windowMenuItem = NSMenuItem()
         let windowMenu = NSMenu(title: "窗口")
@@ -226,6 +242,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.mainMenu = mainMenu
         NSApp.windowsMenu = windowMenu
     }
+
+    // MARK: - 页面缩放动作（菜单「显示」调它们）
+
+    @objc private func zoomInAction() { window?.zoomIn() }
+    @objc private func zoomOutAction() { window?.zoomOut() }
+    @objc private func zoomResetAction() { window?.resetZoom() }
 
     /// 自省：关窗口后确认「关窗不退出应用、也不停服务」。
     private func runSelfTestClose() {
