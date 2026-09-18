@@ -2,10 +2,8 @@
 
 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) Web GUI 的**纯原生 macOS 启动器**。
 
-用一个 Swift + WKWebView 的单进程应用，替代 [dsh-launcher](../dsh-launcher) 那套
-「bash 脚本 + Chrome 应用窗口 + 独立菜单栏托盘 + AppleScript」的组合。
-
-**不依赖 Google Chrome，不需要任何系统自动化权限。**
+用一个 Swift + WKWebView 的单进程应用承载它的 Web GUI：点 Dock 图标即用，
+**不依赖 Google Chrome，也不需要任何系统自动化权限。**
 
 ```
 点 Dock 图标
@@ -13,31 +11,13 @@
                     ↑ 全在一个进程里完成，没有脚本、没有标志文件、没有 osascript
 ```
 
-## 相比 dsh-launcher 的改进
+## 前置要求
 
-| | dsh-launcher（旧） | dsh-mac-launcher（本版） |
-|---|---|---|
-| 承载 GUI | Google Chrome `--app` 窗口 | WKWebView（系统自带 WebKit） |
-| 额外磁盘占用 | Chrome.app **1.4 GB** | **0** |
-| 系统权限 | 「自动化」TCC + 控制 Chrome | **无**（不弹任何授权框） |
-| 逻辑载体 | 545 行 bash + 2 个 Swift 工具 | 单个 Swift 应用 |
-| 进程数 | 启动器 + Chrome + 独立托盘 | **1**（含菜单栏图标） |
-| 状态载体 | 7 个 pid/标志/锁文件 + 3 个日志 | 进程内内存 |
-| 窗口检测 | AppleScript 枚举 + 10 秒超时 | 进程内持有 NSWindow |
-| 窗口撑满 | 取屏幕尺寸 + AppleScript `set bounds`，重试 12 秒 | `NSScreen.visibleFrame`，直接设定 |
-| 菜单栏动作 | 写标志文件 → `open -a` 绕一圈 | 直接方法调用 |
-| 冷启动到界面 | 脚本串行开销 + Chrome 启动 | 实测 **约 8 秒**（含 dsh web 冷启动） |
-
-### 旧版那几个"坑"在这里整类消失
-
-旧 README 记录的 9 个坑里，有 6 个源于"用 Chrome 当窗口"这一个选择：
-
-- ❌ 不能用 `open -na ... --args`（LaunchServices 丢参数）→ 直接加载 URL，不存在
-- ❌ 不能用独立 Chrome 配置（无缓存、多一个 Dock 图标）→ 不存在
-- ❌ 窗口检测不能用 CDP → 不需要检测，窗口是本进程的
-- ❌ `--start-maximized` 被丢弃 → 原生 API 设尺寸
-- ❌ AppleScript heredoc 管道拿不到 stdin、`set active tab index` 报 -10006
-- ❌ AppleScript 权限按发起进程判定，托盘必须绕道标志文件（→ 端口隔离 + 90 秒保质期）
+- macOS 14+（`LSMinimumSystemVersion`）
+- Xcode 命令行工具：`xcode-select --install`（编译需要）
+- **[DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 已安装** ——
+  本应用只是它的 GUI 宿主，不含 DSH 本身。装好后 `dsh --version` 应能正常输出；
+  若不在默认位置，用 `DSH_BIN` 指定
 
 ## 安装
 
@@ -52,9 +32,8 @@ cp -R "build/DSH.app" /Applications/
 
 然后把 `/Applications/DSH.app` 拖到 Dock。首次点击会自己起服务并开窗。
 
-> 从旧版迁移：先退出旧的 `DSH Web` 与菜单栏图标，避免两个鲸鱼图标并存
-> （`pkill -f 'dsh-launcher/dsh-tray'`）。本启动器会复用旧启动器留下的服务，
-> 并从旧日志里取回认证地址，不需要重启服务。
+> 若端口上已经有 `dsh web` 在跑（比如你之前用别的方式启动过），本启动器会直接复用，
+> 并尽量从历史日志里取回认证地址，不会去重启它。
 
 自检（不做任何动作，只打印本次决策）：
 
@@ -88,7 +67,7 @@ DSHLauncher --self-test-close     # 关掉窗口，验证「关窗不退出应�
 **窗口**
 - 默认占满屏幕可用区域；`DSH_WINDOW_MODE=custom` 时用配置尺寸，并记住你调整过的大小
 - 页面缩放：`⌘+` / `⌘-` 每档 10%、`⌘0` 回到 100%（菜单「显示」）；调过的值会被记住
-- **关窗口不退出应用**：服务与菜单栏图标继续在（与原版语义一致），点 Dock 图标窗口回来
+- **关窗口不退出应用**：服务与菜单栏图标继续在，点 Dock 图标窗口回来
 - 外链交给系统默认浏览器；下载走"下载"文件夹
 - 右键菜单是精简版（剪切/拷贝/粘贴/重新载入/回到主页），没有浏览器味的"检查元素"
 
@@ -103,8 +82,7 @@ DSHLauncher --self-test-close     # 关掉窗口，验证「关窗不退出应�
 
 ## 配置
 
-环境变量（也可写在 `~/.dsh/mac-launcher.yaml`，格式 `KEY: value`）。
-名字与原版一致，原有自定义无需改写：
+环境变量（也可写在 `~/.dsh/mac-launcher.yaml`，格式 `KEY: value`）：
 
 | 变量 | 默认 | 说明 |
 |---|---|---|
@@ -161,10 +139,10 @@ Object.keys(localStorage).filter(k => k.startsWith('dsh')).forEach(k => localSto
 **想完全重置本启动器的状态**（cookie、窗口大小、缓存）：
 
 ```sh
-rm -rf ~/Library/WebKit/com.deepseek.harness.mac-launcher \
-       ~/Library/HTTPStorages/com.deepseek.harness.mac-launcher.binarycookies \
+rm -rf ~/Library/WebKit/com.kaidiren.dsh-mac-launcher \
+       ~/Library/HTTPStorages/com.kaidiren.dsh-mac-launcher.binarycookies \
        ~/Library/Logs/DSH
-defaults delete com.deepseek.harness.mac-launcher 2>/dev/null
+defaults delete com.kaidiren.dsh-mac-launcher 2>/dev/null
 ```
 
 ## 目录结构
@@ -186,8 +164,7 @@ defaults delete com.deepseek.harness.mac-launcher 2>/dev/null
 
 ## 已知限制
 
-- 菜单栏图标只在**本应用运行时**存在（旧版是常驻独立进程）。退掉应用图标就没了 ——
-  但服务仍在跑，重新打开应用即可。
+- 菜单栏图标只在**本应用运行时**存在。退掉应用图标就没了 —— 但服务仍在跑，重新打开应用即可。
 - WKWebView 与 Chrome 的渲染内核不同。已实测 DSH GUI 完整可用（会话列表、工作区、余额、
   上传下载、WebSocket 长连接），个别 CSS 细节可能有细微差异。
 - 在 macOS 14.4 以下运行时会注入 `AbortSignal.any` / `Promise.withResolvers` / `Promise.try`
@@ -195,12 +172,14 @@ defaults delete com.deepseek.harness.mac-launcher 2>/dev/null
 - 文件上传用 `<input type=file>`（原生文件面板）；拖放上传与剪贴板粘贴图片沿用浏览器行为，
   遇到问题请记录到 `launcher.log` 附近的现象里反馈。
 
-## 图标来源
+## 许可
 
-`Resources/icons/` 下的应用图标与菜单栏图标取自
+本项目以 [MIT](LICENSE) 发布。
+
+`Resources/icons/app-icon-mac.png`（应用图标）取自
 [anywhere-labs/dsh-desktop](https://github.com/anywhere-labs/dsh-desktop)，
-使用时请遵守该项目的许可。
+**其版权归该项目所有、不在本项目的 MIT 范围内**；再分发前请自行确认其许可。
+`Resources/icons/tray-iconTemplate*.png` 与 `tray-icon.svg` 沿用旧启动器的素材。
 
-菜单栏图标直接沿用 dsh-launcher 的那份（与 `dsh-tray` 用法一致）：
-加载 `tray-iconTemplate@2x.png`（32×32），逻辑尺寸设为 18pt，并标记为模板图标。
+菜单栏图标加载 `@2x`（32×32）那份、逻辑尺寸设为 18pt，并标记为模板图标。
 **不要改用 1x（16×16）那份** —— 它在 Retina 上要被拉大两倍多，菜单栏里会发糊。

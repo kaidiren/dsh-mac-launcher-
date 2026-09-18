@@ -1,15 +1,15 @@
 // Config.swift —— 启动器配置。
 //
-// 目的：对齐原 dsh-launcher 的全部可配置项，同时把状态文件从仓库目录搬到
-// 用户的标准位置（日志进 ~/Library/Logs/DSH，状态进 UserDefaults）。
+// 目的：集中所有可调项，并把状态文件放在用户的标准位置
+// （日志进 ~/Library/Logs/DSH，状态进 UserDefaults）。
 //
 // 优先级：命令行参数 > 环境变量 > 配置文件 > 内置默认值
-// 环境变量名与原 launch-dsh-web.sh 完全一致，老用户的自定义无需改写。
+// 环境变量名保持稳定，升级后原有自定义无需改写。
 import Foundation
 
 /// 窗口尺寸模式。
 enum WindowMode: String {
-    /// 占满屏幕可用区域（默认，等价旧版的 maximized）。
+    /// 占满屏幕可用区域（默认）。
     case maximized
     /// 使用固定尺寸。
     case custom
@@ -59,11 +59,11 @@ struct LauncherConfig {
     var serviceStatePath: URL { logDirectory.appendingPathComponent("service-state.json") }
 
     /// 可能记着认证 URL 的日志文件，按"越新越优先"排列。
-    /// 包含原 dsh-launcher 的 dsh-web.log：从旧启动器迁移过来时，
-    /// 手上那个服务很可能是它启动的，其 token 只出现在那份日志里。
+    /// 也包含旧版 shell 启动器的日志：端口上那个服务若是它启动的，
+    /// 其 token 只会出现在那份日志里。
     var authLogCandidates: [URL] {
         var candidates: [URL] = [serviceLogPath]
-        // 原 dsh-launcher 的日志：迁移期最常见的一种"别人的服务"
+        // 旧版 shell 启动器可能把日志留在这两处
         let legacyLogs = [
             "\(homeDirectory)/dsh/dsh-launcher/dsh-web.log",
             "\(homeDirectory)/dsh-launcher/dsh-web.log",

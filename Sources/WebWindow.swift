@@ -62,11 +62,8 @@ final class WebWindow: NSObject, NSWindowDelegate, WKNavigationDelegate, WKUIDel
     private static let pageZoomKey = "pageZoom"
     private static let minZoom = 0.5
     private static let maxZoom = 3.0
-    /// 服务最近一行输出，用于让等待过程"看得见"
-    private var lastServiceLine = ""
     /// 前端就绪轮询的中间状态。
     private var readinessAttempts = 0
-    private var stableReadings = 0
     private var lastContentLength = -1
 
     /// 窗口不可用（已关闭）时由 AppDelegate 重新创建。
@@ -231,11 +228,6 @@ final class WebWindow: NSObject, NSWindowDelegate, WKNavigationDelegate, WKUIDel
         // 每秒刷新一次"阶段 + 已用时间"，让等待过程可见
         startProgressTicker()
 
-        // 服务输出（stdout）里挑最后一行展示，用户能看到 dsh web 确实在动
-        service.onOutput = { [weak self] text in
-            Task { @MainActor in self?.noteServiceOutput(text) }
-        }
-
         do {
             try await service.startIfNeeded()
         } catch {
@@ -269,17 +261,6 @@ final class WebWindow: NSObject, NSWindowDelegate, WKNavigationDelegate, WKUIDel
     private func stopProgressTicker() {
         progressTask?.cancel()
         progressTask = nil
-    }
-
-    /// 展示 `dsh web` 最近一行输出（挑有信息量的那行）。
-    private func noteServiceOutput(_ text: String) {
-        for rawLine in text.split(separator: "\n") {
-            let line = rawLine.trimmingCharacters(in: .whitespaces)
-            if line.isEmpty { continue }
-            // 认证 URL 是本机凭据，不往界面上放
-            if line.contains("token=") { continue }
-            lastServiceLine = String(line.prefix(90))
-        }
     }
 
     /// 加载主页。
@@ -428,11 +409,6 @@ final class WebWindow: NSObject, NSWindowDelegate, WKNavigationDelegate, WKUIDel
     }
 
     // MARK: - 重新加载 / 重启
-
-    /// 提示用户"这个服务不归本启动器管"，因此不能重启它。
-    func showExternalServiceNotice() {
-        showFailure(LauncherError.externalServiceNeedsAuth(port: config.port))
-    }
 
     /// ⌘R：重新加载页面（服务不动）。用于前端资源更新或界面卡住时。
     func reloadPage() {
@@ -644,7 +620,6 @@ final class WebWindow: NSObject, NSWindowDelegate, WKNavigationDelegate, WKUIDel
     /// 服务端已经把页面送达（认证通过），所以此时遮罩上的文案是"正在加载界面"。
     private func scheduleReadinessCheck() {
         readinessAttempts = 0
-        stableReadings = 0
         lastContentLength = -1
         pollReadiness()
     }
@@ -818,9 +793,10 @@ enum LauncherError: LocalizedError {
             return """
             端口 \(port) 上的服务不是本启动器启动的，且拿不到它的认证地址。
 
-            本启动器不会擅自重启别人启动的服务（那会打断正在使用它的会话）。
-            可以：在浏览器里打开 dsh 打印的认证地址完成一次认证（之后本启动器即可复用同一个 cookie）；
-            或先停掉该服务，再让本启动器接管。菜单栏「重启服务」只对本启动器启动的服务生效。
+            两种做法：
+            · 菜单栏「重启服务」会强制停掉它再重新拉起（会打断正在使用它的会话）；
+            · 或者在浏览器里打开 dsh 打印的认证地址完成一次认证，
+              之后本启动器复用同一个 cookie 即可进入。
             """
         }
     }
@@ -923,7 +899,7 @@ enum Polyfill {
               };
             }
           } catch (error) {
-            console.error('dsh-launcher polyfill failed:', error);
+            console.error('dsh polyfill failed:', error);
           }
         })();
         """

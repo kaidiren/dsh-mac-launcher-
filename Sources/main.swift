@@ -14,7 +14,7 @@ let LAUNCH_AT = Date()
 /// 同一个启动器只允许跑一份：
 /// 原方案靠 mkdir 锁 + 两次点击都会各自开窗来兜底，这里直接用应用实例表判断。
 enum InstanceGuard {
-    static let bundleID = "com.deepseek.harness.mac-launcher"
+    static let bundleID = "com.kaidiren.dsh-mac-launcher"
 
     /// 若已有实例在运行则激活它并返回 true（调用方应退出）。
     static func activateExistingInstanceIfAny() -> Bool {
