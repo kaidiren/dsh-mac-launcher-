@@ -42,12 +42,12 @@ fi
 BUILD_TYPE="${BUILD_TYPE:-release}"
 if [ "$BUILD_TYPE" = "debug" ]; then
   OPT_FLAGS=(-Onone -g)
-  echo "==> 编译 $EXECUTABLE（debug：保留符号）"
+  echo "==> 编译 ${EXECUTABLE}（debug：保留符号）"
 else
   # 注意：剥离符号用构建后的 `strip` 命令做，而不是 -Xlinker -strip_all
   # （后者不是合法的 ld 标志，且不同链接器版本支持不一）
   OPT_FLAGS=(-O -wmo -Xlinker -dead_strip)
-  echo "==> 编译 $EXECUTABLE（release：全模块优化 + 剥离符号）"
+  echo "==> 编译 ${EXECUTABLE}（release：全模块优化 + 剥离符号）"
 fi
 
 "${SWIFTC[@]}" \
