@@ -270,7 +270,7 @@ final class ServiceController {
                 return
             }
             if exitedEarly.value { throw ServiceError.exitedEarly("") }
-            try? await Task.sleep(nanoseconds: 150_000_000)
+            try? await Task.sleep(nanoseconds: 100_000_000)
         }
         throw ServiceError.tokenUnavailable(config.tokenTimeout)
     }

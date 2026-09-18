@@ -115,10 +115,25 @@ enum PortProbe {
         while Date() < deadline {
             if isListening(port: port) { return true }
             if !isAlive() { return false }
-            Thread.sleep(forTimeInterval: 0.15)
+            Thread.sleep(forTimeInterval: 0.10)
         }
         return isListening(port: port)
     }
+}
+
+/// 进程启动时刻（内核记录的 p_starttime）。
+/// 用来把「进程启动 → main 顶层第一条语句」这段量出来：这段是 dyld 加载 + 运行时与
+/// 框架（WebKit 等）初始化，睡眠唤醒后页缓存全冷时能占到好几秒 —— 它也是启动耗时里
+/// 唯一无法用 Date() 直接测到的部分。
+enum ProcessStart {
+    static let date: Date? = {
+        var mib: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_PID, getpid()]
+        var info = kinfo_proc()
+        var size = MemoryLayout<kinfo_proc>.stride
+        guard sysctl(&mib, 4, &info, &size, nil, 0) == 0 else { return nil }
+        let tv = info.kp_proc.p_starttime
+        return Date(timeIntervalSince1970: Double(tv.tv_sec) + Double(tv.tv_usec) / 1_000_000)
+    }()
 }
 
 /// 从 `dsh web` 的输出里解析带认证 token 的 URL。

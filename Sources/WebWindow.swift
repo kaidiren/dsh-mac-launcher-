@@ -51,6 +51,12 @@ final class WebWindow: NSObject, NSWindowDelegate, WKNavigationDelegate, WKUIDel
     /// 进度心跳任务与起始时间
     private var progressTask: Task<Void, Never>?
     private var progressStartedAt = Date()
+    /// 预热用的 WebView（不显示、不挂 delegate）：只为尽早把 WebKit 的子进程拉起来。
+    private var prewarmView: WKWebView?
+    /// 启动计时打点：配合 main.swift 的 LAUNCH_AT 与 ProcessStart.date，
+    /// 在界面就绪时汇总成一行"启动耗时"日志（见 logStartupTiming）。
+    private var windowShownAt: Date?
+    private var serviceReadyAt: Date?
     /// 服务最近一行输出，用于让等待过程"看得见"
     private var lastServiceLine = ""
     /// 前端就绪轮询的中间状态。
@@ -72,6 +78,25 @@ final class WebWindow: NSObject, NSWindowDelegate, WKNavigationDelegate, WKUIDel
         self.service = service
         super.init()
         buildWindow()
+        prewarmWebKit()
+    }
+
+    /// 预热 WebKit 子进程。
+    ///
+    /// 只创建一个 WKWebView 并不会拉起 WebKit 的网络/渲染进程 —— 要等真正发起加载才会。
+    /// 而主流程此刻还要解析配置、等端口、等 token，中间白等好几秒。这里先用一个不显示、
+    /// 不挂 delegate 的 WebView 去请求根地址，把这几个子进程（连同到本机服务的连接与
+    /// HTTP 缓存）提前热起来；它和窗口里那个 WebView 共用同一个 websiteDataStore，
+    /// 所以预热期间拿到的 cookie / 缓存对主加载同样有效。
+    ///
+    /// 服务还没起来时这次请求会失败 —— 没关系，它不显示，也没人处理它的错误。
+    private func prewarmWebKit() {
+        let configuration = WKWebViewConfiguration()
+        configuration.websiteDataStore = .default()
+        configuration.userContentController.addUserScript(Polyfill.script())
+        let view = WKWebView(frame: .zero, configuration: configuration)
+        prewarmView = view
+        view.load(URLRequest(url: config.rootURL))
     }
 
     // MARK: - 窗口构建
@@ -154,6 +179,8 @@ final class WebWindow: NSObject, NSWindowDelegate, WKNavigationDelegate, WKUIDel
         NSApp.activate(ignoringOtherApps: true)
         window.makeKeyAndOrderFront(nil)
         if window.isMiniaturized { window.deminiaturize(nil) }
+        // 只在首次记录：之后从菜单栏/Dock 再打开窗口不算"启动"
+        if windowShownAt == nil { windowShownAt = Date() }
     }
 
     /// 开启主流程：先让窗口和转圈动起来，再拉起服务、加载界面。
@@ -185,6 +212,7 @@ final class WebWindow: NSObject, NSWindowDelegate, WKNavigationDelegate, WKUIDel
             showFailure(error)
             return
         }
+        serviceReadyAt = Date()
         stopProgressTicker()
         usedTokenAuth = false
         tokenAttempts = 0
@@ -637,7 +665,31 @@ final class WebWindow: NSObject, NSWindowDelegate, WKNavigationDelegate, WKUIDel
         connectionRetries = 0
         let count = length ?? lastContentLength
         logInfo("界面就绪（\(max(count, 0)) 字符）\(head.map { "内容开头：\($0)" } ?? "")")
+        logStartupTiming()
         overlay.hide()
+    }
+
+    /// 打一行启动耗时汇总。四段各自能说明问题：
+    ///   · 进程启动→main：dyld 加载 + 运行时/框架初始化（睡眠唤醒后页缓存全冷时最贵的一段）
+    ///   · 窗口显示：main 走到窗口摆出来（含 WebKit 对象构建）
+    ///   · 服务就绪：复用已有服务时接近 0；冷启动 dsh web 时是最大头
+    ///   · 界面就绪：加载 + 前端渲染完成
+    private func logStartupTiming() {
+        let now = Date()
+        func offset(_ date: Date?) -> String {
+            guard let date else { return "—" }
+            return String(format: "%.2fs", date.timeIntervalSince(LAUNCH_AT))
+        }
+        let preMain: String
+        let total: String
+        if let start = ProcessStart.date {
+            preMain = String(format: "%.2fs", LAUNCH_AT.timeIntervalSince(start))
+            total = String(format: "%.2fs", now.timeIntervalSince(start))
+        } else {
+            preMain = "?"
+            total = offset(now)
+        }
+        logInfo("启动耗时：进程启动→main \(preMain) / 窗口显示 \(offset(windowShownAt)) / 服务就绪 \(offset(serviceReadyAt)) / 界面就绪 \(offset(now))（合计 \(total)）")
     }
 
     private func pageTitle(from text: String) -> String? {
