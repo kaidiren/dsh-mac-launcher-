@@ -500,13 +500,14 @@ final class WebWindow: NSObject, NSWindowDelegate, WKNavigationDelegate, WKUIDel
             decisionHandler(.download)
             return
         }
-        // 外链交给系统默认浏览器：应用窗口不该在内核里"逛网页"
+        // 应用窗口不该在内核里"逛网页"：只有本服务自己的页面留在窗口内，
+        // 其余 http(s) 链接一律交给系统默认浏览器 —— 包括本机其它服务的链接
+        // （如 http://localhost:8787/…），它们以前会被就地打开、把 DSH 界面顶掉。
         if let url = navigationAction.request.url,
            let scheme = url.scheme?.lowercased(),
            scheme == "http" || scheme == "https",
-           let host = url.host,
-           host != "127.0.0.1", host != "localhost" {
-            NSWorkspace.shared.open(url)
+           !config.isOwnService(url) {
+            openInSystemBrowser(url)
             decisionHandler(.cancel)
             return
         }
@@ -731,15 +732,25 @@ final class WebWindow: NSObject, NSWindowDelegate, WKNavigationDelegate, WKUIDel
                             createWebViewWith configuration: WKWebViewConfiguration,
                             for navigationAction: WKNavigationAction,
                             windowFeatures: WKWindowFeatures) -> WKWebView? {
-        // 页面里的 target=_blank：同源就地打开，外链交给系统浏览器
+        // 页面里的 target=_blank：本服务的链接就地打开（保住窗口上下文），
+        // 其余（外链、以及本机其它端口的服务）交给系统默认浏览器。
         if let url = navigationAction.request.url {
-            if let host = url.host, host == "127.0.0.1" || host == "localhost" {
+            if config.isOwnService(url) {
                 webView.load(navigationAction.request)
-            } else {
-                NSWorkspace.shared.open(url)
+            } else if let scheme = url.scheme?.lowercased(), scheme == "http" || scheme == "https" {
+                openInSystemBrowser(url)
             }
         }
         return nil
+    }
+
+    /// 交给系统默认浏览器打开，并留一行日志。
+    ///
+    /// 日志只记 host + path：链接 query 里可能带 token，不能落到 launcher.log 里。
+    private func openInSystemBrowser(_ url: URL) {
+        let path = url.path.isEmpty ? "/" : url.path
+        logInfo("链接交给系统浏览器：\(url.host ?? "?")\(path)")
+        NSWorkspace.shared.open(url)
     }
 
     // MARK: - WKDownloadDelegate

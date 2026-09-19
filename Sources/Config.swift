@@ -79,6 +79,23 @@ struct LauncherConfig {
     // MARK: 派生
     var rootURL: URL { URL(string: "http://127.0.0.1:\(port)/")! }
 
+    /// 这个 URL 是否属于**本启动器自己的服务**：只看端口。
+    ///
+    /// 规则：启动端口是 `port`（默认 3080）时，3080 上的页面一律留在 WKWebView 内导航 ——
+    /// 它们是本服务的界面、SPA 路由与认证跳转（cookie 失效时会用带 token 的地址加载，
+    /// 服务端 303 到 `/?token=…` 并下发 cookie；这一步若被丢到外部浏览器，窗口就再也
+    /// 拿不到 cookie，只能反复重启服务）。其它端口 —— 本机别的服务（如 8787 的看板）
+    /// 与任何外网地址 —— 一律交给系统默认浏览器，点链接不再把 DSH 界面顶掉。
+    ///
+    /// 不校验 host：`127.0.0.1:3080`、`localhost:3080` 都算自己（写法不同、端口相同）。
+    /// 代价是形如 `example.com:3080` 的外网地址也会被当成"自己的服务"留在窗口内；
+    /// 真要收紧，加一条"host 必须回环"的条件即可。
+    func isOwnService(_ url: URL) -> Bool {
+        let scheme = url.scheme?.lowercased() ?? ""
+        guard scheme == "http" || scheme == "https" else { return false }
+        return (url.port ?? (scheme == "https" ? 443 : 80)) == port
+    }
+
     /// 应用自身默认位置（用于把 dsh 的 nvm bin 目录补进 PATH）。
     static var homeDirectory: String { NSHomeDirectory() }
 
