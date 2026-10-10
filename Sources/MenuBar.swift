@@ -15,7 +15,7 @@ final class MenuBar: NSObject, NSMenuDelegate {
     private let service: ServiceController
     private unowned let window: WebWindow
 
-    /// 打开窗口（左键或菜单项）。
+    /// 打开（左键或菜单项）。
     var onOpen: (() -> Void)?
 
     init(config: LauncherConfig, service: ServiceController, window: WebWindow) {
@@ -108,21 +108,21 @@ final class MenuBar: NSObject, NSMenuDelegate {
         menu.addItem(header)
         menu.addItem(.separator())
 
-        let open = NSMenuItem(title: "打开窗口", action: #selector(openWindow), keyEquivalent: "o")
+        let open = NSMenuItem(title: "打开", action: #selector(openWindow), keyEquivalent: "o")
         open.target = self
         open.isEnabled = true
         menu.addItem(open)
 
-        let reload = NSMenuItem(title: "重新载入界面", action: #selector(reloadPage), keyEquivalent: "r")
+        let reload = NSMenuItem(title: "刷新", action: #selector(reloadPage), keyEquivalent: "r")
         reload.target = self
         reload.isEnabled = service.state.isRunning
         menu.addItem(reload)
 
         menu.addItem(.separator())
-        // 「重启服务」无条件可用：它的语义是"把端口上的服务重启掉"，
+        // 「重启」无条件可用：它的语义是"把端口上的服务重启掉"，
         // 哪怕那个服务不是本启动器拉起的 —— 先强制停掉，再重新拉起。
         // 唯一例外是动作正在进行中（busy），避免重入。
-        let restart = NSMenuItem(title: "重启服务", action: #selector(restartService), keyEquivalent: "R")
+        let restart = NSMenuItem(title: "重启", action: #selector(restartService), keyEquivalent: "R")
         restart.target = self
         restart.isEnabled = !service.state.isBusy
         restart.toolTip = service.ownsProcess
@@ -130,7 +130,7 @@ final class MenuBar: NSObject, NSMenuDelegate {
             : "端口 \(config.port) 上的服务不是本启动器启动的：重启会先强制停掉它再重新拉起（会打断正在使用它的会话）"
         menu.addItem(restart)
 
-        let quit = NSMenuItem(title: "退出 DSH", action: #selector(quitAll), keyEquivalent: "q")
+        let quit = NSMenuItem(title: "退出", action: #selector(quitAll), keyEquivalent: "q")
         quit.target = self
         quit.isEnabled = true
         menu.addItem(quit)
@@ -142,7 +142,7 @@ final class MenuBar: NSObject, NSMenuDelegate {
         switch service.state {
         case .ready:
             let owner = service.ownsProcess ? "" : "（外部启动）"
-            return "DSH 运行中 · 端口 \(config.port)\(owner)"
+            return "运行中 · 端口 \(config.port)\(owner)"
         case .starting: return "正在启动服务…"
         case .waitingPort: return "等待服务就绪…"
         case .failed(let reason): return "启动失败：\(reason)"
@@ -153,12 +153,12 @@ final class MenuBar: NSObject, NSMenuDelegate {
     // MARK: - 动作
 
     @objc private func openWindow() {
-        logInfo("菜单栏：打开窗口")
+        logInfo("菜单栏：打开")
         onOpen?()
     }
 
     @objc private func reloadPage() {
-        logInfo("菜单栏：重新载入界面")
+        logInfo("菜单栏：刷新")
         window.reloadPage()
     }
 
@@ -166,8 +166,8 @@ final class MenuBar: NSObject, NSMenuDelegate {
         // 不再按归属设限：用户要的就是"把这个端口上的服务重启掉"。
         // 非本启动器拉起的服务会先被强制停止（可能打断正在使用它的会话），日志里会写明。
         logInfo(service.ownsProcess
-                ? "菜单栏：重启服务"
-                : "菜单栏：重启服务（端口上的服务非本启动器启动，将强制停止后重新拉起）")
+                ? "菜单栏：重启"
+                : "菜单栏：重启（端口上的服务非本启动器启动，将强制停止后重新拉起）")
         window.restartService()
     }
 
@@ -175,7 +175,7 @@ final class MenuBar: NSObject, NSMenuDelegate {
     /// 走 AppDelegate.requestQuit：停服务是异步的，必须等它做完再真正退出
     /// （早期直接在 applicationWillTerminate 里同步等待，会与主线程死锁）。
     @objc private func quitAll() {
-        logInfo("菜单栏：退出 DSH（关窗口 + 停服务 + 撤图标）")
+        logInfo("菜单栏：退出（关窗口 + 停服务 + 撤图标）")
         (NSApp.delegate as? AppDelegate)?.requestQuit()
     }
 

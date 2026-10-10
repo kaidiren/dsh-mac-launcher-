@@ -301,9 +301,9 @@ final class ServiceController {
     func restart() async throws {
         restartInFlight = true
         defer { restartInFlight = false }
-        logInfo("重启服务：停止 → 拉起")
+        logInfo("重启：停止 → 拉起")
         // force：端口上的服务即便不是本启动器拉起的也要停掉 ——
-        // 「重启服务」的语义就是"把这个端口上的服务重启掉"，而不是"只重启我认识的那个"。
+        // 「重启」的语义就是"把这个端口上的服务重启掉"，而不是"只重启我认识的那个"。
         await stop(force: true)
         // 等端口真正释放，否则紧接着的启动会以为服务还在而直接复用
         let deadline = Date().addingTimeInterval(config.stopTimeout)
@@ -322,8 +322,8 @@ final class ServiceController {
 
     /// 停止服务。
     ///
-    /// 默认只对自己拉起的进程动手 —— 「退出 DSH」走这条：退掉自己的东西，不误杀别人在跑的服务。
-    /// `force: true` 时连"不是本启动器启动的服务"也一起停：菜单栏「重启服务」走这条，
+    /// 默认只对自己拉起的进程动手 —— 「退出」走这条：退掉自己的东西，不误杀别人在跑的服务。
+    /// `force: true` 时连"不是本启动器启动的服务"也一起停：菜单栏「重启」走这条，
     /// 那个动作的语义就是"把端口上的服务重启掉"，哪怕它当初是别处启动的。
     func stop(force: Bool = false) async {
         guard let task = process else {
@@ -347,7 +347,7 @@ final class ServiceController {
         task.terminate()   // SIGTERM，让 dsh 有机会清理
         // 宽限期内等它自己退出；超时就升级为 SIGKILL。
         // 实测 dsh web 在 SIGTERM 后可能因为活跃连接而迟迟不退，
-        // 不升级的话「退出 DSH」会留下一个仍在监听的后台进程。
+        // 不升级的话「退出」会留下一个仍在监听的后台进程。
         var deadline = Date().addingTimeInterval(3.0)
         while Date() < deadline, task.isRunning {
             try? await Task.sleep(nanoseconds: 150_000_000)
@@ -376,7 +376,7 @@ final class ServiceController {
     ///
     /// 没有子进程句柄时只能按端口反查监听者（lsof -t）再动手：SIGTERM → 宽限 3 秒 →
     /// SIGKILL，最后确认端口是否真的释放。这会打断正在使用该服务的会话，
-    /// 所以只在用户显式点「重启服务」时才走这条路。
+    /// 所以只在用户显式点「重启」时才走这条路。
     private func forceStopByPort() async {
         var pids = Self.listeningPIDs(port: config.port)
         guard !pids.isEmpty else {

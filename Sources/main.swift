@@ -100,12 +100,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             logInfo("按配置不自动开窗（DSH_OPEN_WINDOW=0）")
             if config.showStartupOverlay {
                 // 不开窗也要让后续"从菜单栏打开"能直接进
-                logInfo("等待用户从菜单栏打开窗口")
+                logInfo("等待用户从菜单栏打开")
             }
         }
 
         if AppFlags.selfTestRestart {
-            logInfo("自省模式：5 秒后触发一次「重启服务」")
+            logInfo("自省模式：5 秒后触发一次「重启」")
             DispatchQueue.main.asyncAfter(deadline: .now() + 5) { [weak self] in
                 self?.runSelfTestRestart()
             }
@@ -178,7 +178,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: - 应用菜单
 
-    /// 原生应用菜单：⌘W 关窗口、⌘R 重新载入、⇧⌘R 重启服务、⌘Q 退出。
+    /// 原生应用菜单：⌘W 关窗口、⌘R 刷新、⇧⌘R 重启、⌘Q 退出。
     private func buildMainMenu() {
         let mainMenu = NSMenu()
 
@@ -228,10 +228,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let windowMenu = NSMenu(title: "窗口")
         let close = NSMenuItem(title: "关闭窗口", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
         windowMenu.addItem(close)
-        let reload = NSMenuItem(title: "重新载入界面", action: #selector(reloadPage), keyEquivalent: "r")
+        let reload = NSMenuItem(title: "刷新", action: #selector(reloadPage), keyEquivalent: "r")
         reload.target = self
         windowMenu.addItem(reload)
-        let restart = NSMenuItem(title: "重启服务", action: #selector(restartService), keyEquivalent: "R")
+        let restart = NSMenuItem(title: "重启", action: #selector(restartService), keyEquivalent: "R")
         restart.target = self
         windowMenu.addItem(restart)
         windowMenu.addItem(.separator())
@@ -266,9 +266,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    /// 自省：走的是与菜单栏「重启服务」同一个 window.restartService()。
+    /// 自省：走的是与菜单栏「重启」同一个 window.restartService()。
     private func runSelfTestRestart() {
-        logInfo("自省：触发重启服务")
+        logInfo("自省：触发重启")
         window.restartService { [weak self] in
             guard let self else { return }
             self.logInfoRestartOutcome()
@@ -294,7 +294,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 enum AppFlags {
     private(set) static var forwardArgs: [String] = []
     private(set) static var printDecision = false
-    /// 自省：启动完成后触发一次「重启服务」，用于验证该动作的完整链路。
+    /// 自省：启动完成后触发一次「重启」，用于验证该动作的完整链路。
     /// 菜单栏动作无法用脚本点击（需要辅助功能权限），这条路径是它的可靠替身。
     private(set) static var selfTestRestart = false
     /// 自省：关掉窗口后检查"应用与服务是否都还活着"，然后退出。
@@ -345,7 +345,7 @@ enum AppFlags {
 
         启动器选项：
           --print-decision   只打印本次的启动决策，不做任何动作（自检用）
-          --self-test-restart 启动后自动触发一次「重启服务」（验证该动作的链路）
+          --self-test-restart 启动后自动触发一次「重启」（验证该动作的链路）
           --self-test-close   启动后关闭窗口，验证「关窗不退出应用、也不停服务」
           --isolated          跳过单实例守卫（验证启动流程用；请配合独立的
                               DSH_WEB_PORT 与 DSH_LOG_DIR，否则会与正式实例互相干扰）
@@ -370,7 +370,7 @@ enum AppFlags {
 }
 
 enum Version {
-    static let string = "1.0.0"
+    static let string = "1.0.1"
 }
 
 // MARK: - 信号处理

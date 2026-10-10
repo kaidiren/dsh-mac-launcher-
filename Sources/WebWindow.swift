@@ -41,7 +41,7 @@ final class WebWindow: NSObject, NSWindowDelegate, WKNavigationDelegate, WKUIDel
     private static let maxConnectionRetries = 15
     /// 是否正在重启服务。
     ///
-    /// 重启期间一律不加载：`start()`（冷启动流程）与菜单栏「重启服务」可能几乎同时
+    /// 重启期间一律不加载：`start()`（冷启动流程）与菜单栏「重启」可能几乎同时
     /// 发生，而 `start()` 走到加载那一步时并不知道服务正要被换掉，
     /// 就会撞上"端口关了又开"的窗口期、白跑一串连接失败重试。
     /// 重启流程自己在就绪后会发起加载，所以这里直接让路即可。
@@ -799,13 +799,13 @@ enum LauncherError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .authenticationFailed:
-            return "无法完成认证。请确认 dsh web 服务正在运行，或从菜单栏选择「重启服务」。"
+            return "无法完成认证。请确认 dsh web 服务正在运行，或从菜单栏选择「重启」。"
         case .externalServiceNeedsAuth(let port):
             return """
             端口 \(port) 上的服务不是本启动器启动的，且拿不到它的认证地址。
 
             两种做法：
-            · 菜单栏「重启服务」会强制停掉它再重新拉起（会打断正在使用它的会话）；
+            · 菜单栏「重启」会强制停掉它再重新拉起（会打断正在使用它的会话）；
             · 或者在浏览器里打开 dsh 打印的认证地址完成一次认证，
               之后本启动器复用同一个 cookie 即可进入。
             """
@@ -835,7 +835,7 @@ final class WebView: WKWebView {
             menu.addItem(.separator())
         }
 
-        let reload = NSMenuItem(title: "重新载入界面", action: #selector(reloadFromMenu), keyEquivalent: "")
+        let reload = NSMenuItem(title: "刷新", action: #selector(reloadFromMenu), keyEquivalent: "")
         reload.target = self
         menu.addItem(reload)
 
