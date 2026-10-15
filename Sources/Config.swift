@@ -49,6 +49,10 @@ struct LauncherConfig {
     var logDirectory: URL = LauncherConfig.defaultLogDirectory()
     var appLogPath: URL { logDirectory.appendingPathComponent("launcher.log") }
     var serviceLogPath: URL { logDirectory.appendingPathComponent("service.log") }
+    /// `dsh web` 的原始输出（stdout + stderr 合流）。启动器按节奏增量读它：一边解析
+    /// 认证 URL，一边把脱敏后的内容转发进 `service.log`。
+    /// 里面会出现**明文认证 URL**，所以固定 0600：这份不外发，要外发用 `service.log`。
+    var serviceRawLogPath: URL { logDirectory.appendingPathComponent("service-raw.log") }
     /// 带 token 认证 URL 的缓存（权限 0600；token 是本机凭据）。
     var authCachePath: URL { logDirectory.appendingPathComponent("auth-url") }
 
@@ -62,7 +66,10 @@ struct LauncherConfig {
     /// 也包含旧版 shell 启动器的日志：端口上那个服务若是它启动的，
     /// 其 token 只会出现在那份日志里。
     var authLogCandidates: [URL] {
-        var candidates: [URL] = [serviceLogPath]
+        // 原始日志里是**明文**（service.log 的 token 已被 Log.redact 写成 <REDACTED>，
+        // 正则匹配不到），所以它排第一；service.log 作为后备 —— 老版本或外部启动器
+        // 留下的日志里可能有明文。
+        var candidates: [URL] = [serviceRawLogPath, serviceLogPath]
         // 旧版 shell 启动器可能把日志留在这两处
         let legacyLogs = [
             "\(homeDirectory)/dsh/dsh-launcher/dsh-web.log",

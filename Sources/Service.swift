@@ -4,10 +4,19 @@
 //   · 进程检测（lsof 查端口）        → PortProbe.isListening（进程内 socket）
 //   · nohup 拉起 + pid 文件          → Process + 进程内句柄
 //   · 等端口就绪（0.2s 轮询 60s）    → PortProbe.waitUntilListening
-//   · tail/grep 日志取 token URL     → 直接读子进程 stdout（AuthURLParser.Scanner）
+//   · tail/grep 日志取 token URL     → 增量读"原始输出日志"（AuthURLParser.Scanner）
 //   · dsh-web.pid / dsh-web.url      → 进程内状态 + 一份 0600 权限的缓存
 //   · mkdir 启动锁 + stop/restart 标志文件 → 主线程串行状态机（同一进程内不存在并发）
+//
+// 子进程输出的接法（2026-10-15 重构，重要）：
+//   把 `dsh web` 的 stdout/stderr 直接重定向到 service-raw.log（O_APPEND、0600），
+//   本进程按固定节奏轮询该文件的**增量**，一边喂 token 扫描器，一边把脱敏后的内容
+//   追加进 service.log（保持"日志可以放心外发"）。
+//   不再使用 Pipe + readabilityHandler：管道对端消失后，那两个 fd_monitoring 线程会在
+//   availableData 上空转（实测各烧满一个核，合计 ~200% CPU），而普通文件的增量读只在
+//   我们主动轮询时发生，且 read 到文件末尾就正常返回，不存在"可读一直为真"的形态。
 import Foundation
+import Darwin
 
 /// 服务当前状态。
 enum ServiceState: Equatable {
@@ -15,6 +24,9 @@ enum ServiceState: Equatable {
     case starting
     case waitingPort
     case ready
+    /// 服务进程在"运行中"之后自己退出了（pid）。
+    /// 与 `.failed` 分开：那是"起不来"，这是"起来后又没了"，文案与后续动作都不同。
+    case exited(Int32)
     case failed(String)
 
     var isBusy: Bool {
@@ -35,6 +47,7 @@ enum ServiceState: Equatable {
         case .starting: return "正在启动服务…"
         case .waitingPort: return "等待服务就绪…"
         case .ready: return "运行中"
+        case .exited(let pid): return "服务已退出（pid \(pid)）"
         case .failed(let reason): return "启动失败：\(reason)"
         }
     }
@@ -82,7 +95,6 @@ final class ServiceController {
     var ownsProcess: Bool { process != nil }
 
     var onStateChange: ((ServiceState) -> Void)?
-    var onOutput: ((String) -> Void)?
     var onAuthenticatedURL: ((String) -> Void)?
 
     private let config: LauncherConfig
@@ -91,6 +103,12 @@ final class ServiceController {
     private let exitedEarly = AtomicFlag()
     /// 输出尾部若干行，出错时作为诊断信息。
     private var recentOutput: [String] = []
+    /// 原始输出日志的写句柄（子进程的 stdout/stderr 都指向它）。
+    private var rawLogHandle: FileHandle?
+    /// 输出转发进度：原始日志里已经处理到的字节偏移。
+    private var tailOffset: UInt64 = 0
+    /// 输出转发循环（轮询原始日志增量）。
+    private var tailTask: Task<Void, Never>?
 
     init(config: LauncherConfig) {
         self.config = config
@@ -179,26 +197,33 @@ final class ServiceController {
         task.currentDirectoryURL = URL(fileURLWithPath: config.workdir)
         task.environment = Self.childEnvironment(binaryPath: binary)
 
-        let stdoutPipe = Pipe()
-        let stderrPipe = Pipe()
-        task.standardOutput = stdoutPipe
-        task.standardError = stderrPipe
+        // 子进程输出 → 原始日志文件（不接管道，理由见文件头）。
+        // 启动前先记下文件当前大小：本次只解析"这次启动之后新增"的内容，
+        // 免得把上一次服务留下的认证 URL 当成这次的。
+        let rawLogPath = config.serviceRawLogPath
+        try? FileManager.default.createDirectory(at: config.logDirectory, withIntermediateDirectories: true)
+        let startOffset = Self.fileSize(at: rawLogPath)
+        let outputHandle = Self.openAppendOnlyRawLog(at: rawLogPath) ?? FileHandle.nullDevice
+        rawLogHandle = outputHandle
+        task.standardOutput = outputHandle
+        task.standardError = outputHandle
 
-        // 子进程输出：一边写服务日志，一边做 token 增量解析
-        for pipe in [stdoutPipe, stderrPipe] {
-            pipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
-                let data = handle.availableData
-                guard !data.isEmpty, let text = String(data: data, encoding: .utf8) else { return }
-                ServiceLogWriter.shared.append(text)
-                Task { @MainActor [weak self] in
-                    self?.ingest(text)
-                }
-            }
-        }
-
-        task.terminationHandler = { [weak self] _ in
+        task.terminationHandler = { [weak self] proc in
+            let pid = proc.processIdentifier
+            let status = proc.terminationStatus
+            let bySignal = proc.terminationReason == .uncaughtSignal
             Task { @MainActor [weak self] in
-                self?.exitedEarly.value = true
+                guard let self else { return }
+                self.exitedEarly.value = true
+                logInfo("服务进程已退出（pid=\(pid)，status=\(status)\(bySignal ? "，被信号终止" : "")）")
+                // 只有"它仍是当前受管的那个进程 + 界面还显示运行中"才回落；
+                // stop()/restart() 的正常收尾会先把 process 置 nil，不会误报。
+                guard self.process === proc, self.state.isRunning else { return }
+                self.cleanupOutputs()
+                self.process = nil
+                try? FileManager.default.removeItem(at: self.config.serviceStatePath)
+                logInfo("服务不再运行，状态回落为已退出（pid=\(pid)）")
+                self.state = .exited(pid)
             }
         }
 
@@ -210,6 +235,7 @@ final class ServiceController {
         }
         process = task
         recordServiceProcess(pid: task.processIdentifier)
+        startTailLoop(from: startOffset)
         logInfo("已拉起 dsh web（pid=\(task.processIdentifier)，port=\(config.port)，cwd=\(config.workdir)）")
         if !config.forwardArgs.isEmpty {
             logInfo("透传给 dsh web 的参数：\(config.forwardArgs.joined(separator: " "))")
@@ -282,7 +308,6 @@ final class ServiceController {
             recentOutput.append(String(line))
             if recentOutput.count > 20 { recentOutput.removeFirst() }
         }
-        onOutput?(text)
         if authenticatedURL == nil, let found = scanner.feed(text) {
             authenticatedURL = found
             logInfo("已解析到认证 URL（已缓存到 \(config.authCachePath.lastPathComponent)，权限 0600）")
@@ -337,7 +362,7 @@ final class ServiceController {
         }
         guard task.isRunning else {
             logInfo("服务进程已退出")
-            cleanupPipes()
+            cleanupOutputs()
             process = nil
             state = .idle
             return
@@ -363,7 +388,7 @@ final class ServiceController {
         if task.isRunning {
             logInfo("警告：服务进程仍未退出（pid=\(pid)）")
         }
-        cleanupPipes()
+        cleanupOutputs()
         process = nil
         AuthCache.clear(config.authCachePath)
         try? FileManager.default.removeItem(at: config.serviceStatePath)
@@ -406,7 +431,7 @@ final class ServiceController {
         } else {
             logInfo("警告：端口 \(config.port) 仍被占用（pid=\(left.map(String.init).joined(separator: ","))；可能是权限不足，请在终端手动处理）")
         }
-        cleanupPipes()
+        cleanupOutputs()
         process = nil
         AuthCache.clear(config.authCachePath)
         try? FileManager.default.removeItem(at: config.serviceStatePath)
@@ -493,10 +518,73 @@ final class ServiceController {
         try await launch()
     }
 
-    private func cleanupPipes() {
-        for pipe in [process?.standardOutput as? Pipe, process?.standardError as? Pipe] {
-            pipe?.fileHandleForReading.readabilityHandler = nil
+    // MARK: - 输出转发
+
+    /// 启动输出转发循环。
+    ///
+    /// 节奏自适应：启动阶段（还没到 ready）密一点，尽快解析出认证 URL；服务跑起来后
+    /// 放到 2 秒一次 —— 每次只是 fstat + 读增量，开销可忽略，但足以让 service.log 保持
+    /// "服务的输出都在里面"。
+    private func startTailLoop(from offset: UInt64) {
+        tailTask?.cancel()
+        tailOffset = offset
+        let path = config.serviceRawLogPath
+        tailTask = Task { [weak self] in
+            while !Task.isCancelled {
+                let interval: TimeInterval = (self?.state.isRunning ?? false) ? 2.0 : 0.3
+                try? await Task.sleep(nanoseconds: UInt64(interval * 1_000_000_000))
+                if Task.isCancelled { return }
+                guard let self else { return }
+                self.pumpRawLog(at: path)
+            }
         }
+    }
+
+    /// 把原始日志里的新增内容转发出去：喂 token 扫描器 + 脱敏后追加进服务日志。
+    private func pumpRawLog(at path: URL) {
+        guard let handle = try? FileHandle(forReadingFrom: path) else { return }
+        defer { try? handle.close() }
+        guard let end = try? handle.seekToEnd() else { return }
+        // 文件被外部截断/轮转：从头再来，别让偏移卡在文件尾之后。
+        if end < tailOffset { tailOffset = 0 }
+        guard end > tailOffset else { return }
+
+        // 单次最多搬 256 KB，避免某次爆发式输出把主线程按住太久；剩下的下一轮继续。
+        let chunk = min(end - tailOffset, 256 * 1024)
+        do {
+            try handle.seek(toOffset: tailOffset)
+            guard let data = try handle.read(upToCount: Int(chunk)), !data.isEmpty else { return }
+            tailOffset += UInt64(data.count)
+            // 宽松解码：块边界可能切在多字节字符中间，不能因此把整块丢掉。
+            let text = String(decoding: data, as: UTF8.self)
+            ServiceLogWriter.shared.append(text)
+            ingest(text)
+        } catch {
+            return
+        }
+    }
+
+    /// 收尾：停掉转发循环、关闭原始日志句柄。
+    private func cleanupOutputs() {
+        tailTask?.cancel()
+        tailTask = nil
+        try? rawLogHandle?.close()
+        rawLogHandle = nil
+    }
+
+    /// 以"只写 + 追加"打开原始日志，并把权限收到 0600（里面可能有明文认证 URL）。
+    private static func openAppendOnlyRawLog(at url: URL) -> FileHandle? {
+        let fd = open(url.path, O_WRONLY | O_CREAT | O_APPEND, 0o600)
+        guard fd >= 0 else { return nil }
+        // 已存在的旧文件不会被上面的 mode 改权限，显式收紧一次。
+        _ = fchmod(fd, 0o600)
+        return FileHandle(fileDescriptor: fd, closeOnDealloc: false)
+    }
+
+    private static func fileSize(at url: URL) -> UInt64 {
+        guard let attrs = try? FileManager.default.attributesOfItem(atPath: url.path),
+              let size = attrs[.size] as? NSNumber else { return 0 }
+        return size.uint64Value
     }
 
     // MARK: - 环境

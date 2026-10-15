@@ -186,7 +186,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let appMenuItem = NSMenuItem()
         let appMenu = NSMenu()
         let appName = "DSH"
-        appMenu.addItem(withTitle: "关于 \(appName)", action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)), keyEquivalent: "")
+        // 「关于」面板走自定义入口：只展示语义版本，不带构建号（见 showAboutPanel）
+        let about = NSMenuItem(title: "关于 \(appName)", action: #selector(showAboutPanel), keyEquivalent: "")
+        about.target = self
+        appMenu.addItem(about)
         appMenu.addItem(.separator())
         appMenu.addItem(withTitle: "隐藏 \(appName)", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h")
         appMenu.addItem(.separator())
@@ -241,6 +244,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         NSApp.mainMenu = mainMenu
         NSApp.windowsMenu = windowMenu
+    }
+
+    /// 「关于」面板：只显示语义版本，不显示构建号。
+    ///
+    /// 系统标准格式是 `Version <short> (<build>)`，build 取自 Info.plist 的
+    /// CFBundleVersion。实测（见 .tmp-diag/about-probe 探针）：只传 applicationVersion
+    /// 仍会回落到 bundle 里的该值，必须显式把 version 传成**空串**才能压掉括号；
+    /// 传空串时版权行照常显示。CFBundleVersion 字段保留，只是不再展示。
+    @objc private func showAboutPanel() {
+        NSApp.orderFrontStandardAboutPanel(options: [
+            .applicationName: "DSH",
+            .applicationVersion: Version.string,
+            .version: ""
+        ])
     }
 
     // MARK: - 页面缩放动作（菜单「显示」调它们）
@@ -370,7 +387,7 @@ enum AppFlags {
 }
 
 enum Version {
-    static let string = "1.0.1"
+    static let string = "1.0.3"
 }
 
 // MARK: - 信号处理

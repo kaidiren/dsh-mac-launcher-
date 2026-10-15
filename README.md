@@ -53,13 +53,13 @@ DSHLauncher --self-test-close     # 关掉窗口，验证「关窗不退出应�
 
 **服务**
 - 端口已有监听 → 复用，**绝不重启**
-- 端口空闲 → 拉起 `dsh web --port <端口> --no-open`，直接读子进程 stdout 解析认证 URL
+- 端口空闲 → 拉起 `dsh web --port <端口> --no-open`，子进程输出直接写 `service-raw.log`，启动器读它的增量解析认证 URL
 - 取到的认证 URL 缓存在 `~/Library/Logs/DSH/auth-url`（权限 `0600`）
 
 **认证**（这一版的核心简化）
 - 日常启动**裸加载根地址**，让持久 cookie 生效 —— 服务端重启也不影响
   （DSH 的签名密钥是持久化凭据，cookie 不绑定进程级 launch token）
-- cookie 失效时才用带 token 的地址补一次认证。token 优先取"服务日志里最新那条"
+- cookie 失效时才用带 token 的地址补一次认证。token 优先取「原始输出日志里本次启动新增的那条」
   （一定是当前进程的）；本启动器启动的服务会重启一次拿新 token
 - **别人启动的服务**（终端里手动跑的、旧启动器留下的）：只尝试从日志恢复认证地址，
   **找不到也绝不重启它** —— 那会打断正在使用它的会话
@@ -109,10 +109,19 @@ DSHLauncher --self-test-close     # 关掉窗口，验证「关窗不退出应�
 | 文件 | 内容 |
 |---|---|
 | `launcher.log` | 启动器决策与动作，排错先看这里 |
-| `service.log` | `dsh web` 的输出（认证 URL 已脱敏） |
+| `service.log` | `dsh web` 的输出（认证 URL 已脱敏），**可以放心外发** |
+| `service-raw.log` | `dsh web` 的原始输出，权限 `0600`；启动器增量读它解析认证 URL。**里面可能有明文 token，不要外发** |
 | `auth-url` | 带 token 的认证地址，权限 `0600`，**本机凭据不要外传** |
 
 目录在应用启动时即建立，所以还没有任何日志时点错误面板的「打开日志」也能打开它。
+
+`service-raw.log` 是这两份日志的中转：子进程的 stdout/stderr 以追加方式（`O_APPEND`）直接写它，
+启动器按节奏读增量 —— 启动阶段 0.3 秒一次（尽快拿到认证 URL），运行期 2 秒一次 —— 一边解析
+认证 URL，一边把**脱敏后**的内容转发进 `service.log`。
+
+> **别把它改回 `Pipe` + `readabilityHandler`**（1.0.3 之前的写法）：管道对端一旦消失，
+> 那两个 `com.apple.NSFileHandle.fd_monitoring` 线程会在 `availableData` 上空转，
+> 实测各烧满一个核、合计约 200% CPU，而且日志里不留任何痕迹。普通文件的增量读不存在这种形态。
 
 ## 排错
 
@@ -164,10 +173,10 @@ defaults delete com.kaidiren.dsh-mac-launcher 2>/dev/null
 
 ## 版本号
 
-两处必须一起改（`build.sh` 只编译，不会替改版本号）：
+两处必须一起改（`build.sh` 只编译，不会替你改）：
 
-- `Resources/Info.plist` → `CFBundleShortVersionString`（Finder/关于面板显示）与 `CFBundleVersion`（构建号）
-- `Sources/main.swift` → `enum Version` 的 `string`（`--version` 的输出）
+- `Sources/main.swift` → `enum Version` 的 `string`（`--version` 的输出，也是「关于」面板显示的版本）
+- `Resources/Info.plist` → `CFBundleShortVersionString`（Finder 与系统层面；应与上面那个保持一致）
 
 升幅约定（**每次改动都顺手升，别攒着**）：
 
@@ -177,7 +186,22 @@ defaults delete com.kaidiren.dsh-mac-launcher 2>/dev/null
 | 新增用户可见能力 | minor `1.x.0` | 页面缩放、新菜单动作、新自省参数 |
 | 文案/配色修正、缺陷修复 | patch `1.0.x` | 菜单文案精简、错别字、修一处 UI 抖动 |
 
-`CFBundleVersion` 每次构建 +1，与 short version 各自独立。
+`Info.plist` 里的 `CFBundleVersion`（构建号）只是占位，**不递增、也不展示**：它是系统的
+常规字段，而「关于」面板刻意只渲染语义版本 —— 面板的格式本来是 `Version <short> (<build>)`，
+`main.swift` 里的 `showAboutPanel()` 把 `version` 传成空串才压掉后面那截括号（只传
+`applicationVersion` 会回落到 bundle 的构建号，实测过）。将来若要签名分发、需要构建号
+单调递增，再恢复维护它即可。
+
+改完记得 `./build.sh` 并覆盖安装 `/Applications/DSH.app`。注意：安装只换了磁盘上的包，
+**关于面板、菜单都来自运行中的进程**，要让改动可见必须重启启动器进程（退出再打开）；
+直接改盘上的 `Info.plist` 对已经在跑的实例无效。
+
+> 重启时别用"会话里挂个 `sleep && kill && open` 脚本"这种办法：那个脚本属于发起它的
+> 那个会话，而重启动作本身会停掉 dsh web，脚本常在 `open` 之前就被一起收走，表现为
+> "窗口关了却再也起不来"。可靠做法是把延迟动作交给外部执行者（例如 launchd 一次性任务），
+> 或者干脆手动退出再打开。另外也别图省事用 `kill -9` 旧实例：强杀会让服务来不及清理
+> （1.0.3 起 `dsh web` 的输出改为直接写日志文件、不再接管道，原先"管道读端消失导致
+> 它因 EPIPE 直接死"那条已经不存在了）。
 
 ## 已知限制
 

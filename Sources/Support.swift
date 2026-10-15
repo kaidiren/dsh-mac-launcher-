@@ -1,7 +1,7 @@
 // Support.swift —— 日志、端口探测与认证 URL 解析等基础工具。
 //
-// 与原方案的关键差别：这里不再有 lsof 子进程、不再有 curl 探活子进程、
-// 不再有日志文件 grep 回捞 token —— 全部改成进程内的直接调用。
+// 与原方案的关键差别：探活与端口探测都在进程内完成（旧方案要 fork lsof / curl），
+// 认证 URL 也从"读子进程 stdout"改成"增量读原始输出日志"（缘由见 Service.swift 文件头）。
 import Foundation
 import Darwin
 
@@ -138,8 +138,8 @@ enum ProcessStart {
 
 /// 从 `dsh web` 的输出里解析带认证 token 的 URL。
 ///
-/// 原方案是"tail 日志 + grep + tail -1"，且必须等日志落盘、再区分本次新增的行；
-/// 这里直接读子进程的 stdout/stderr，边读边解析，拿到即用。
+/// 现行做法：增量读"原始输出日志"（见 Service.swift 文件头），边读边解析，拿到即用；
+/// 启动前会记下文件大小，因此只会命中本次启动新增的内容。
 enum AuthURLParser {
     /// 匹配 `dsh web: http://127.0.0.1:3080/?token=...`（也容忍 LAN 地址后缀）。
     static func firstAuthURL(in text: String, port: Int) -> String? {
@@ -162,7 +162,7 @@ enum AuthURLParser {
         return String(text[matchRange])
     }
 
-    /// 增量扫描器：流式喂入输出片段，命中一次后即返回（用于逐块读取管道）。
+    /// 增量扫描器：流式喂入输出片段，命中一次后即返回（用于逐块喂入日志增量）。
     struct Scanner {
         let port: Int
         private var buffer = ""

@@ -80,6 +80,8 @@ final class MenuBar: NSObject, NSMenuDelegate {
             return "DSH 运行中（端口 \(config.port)）"
         case .starting, .waitingPort:
             return "DSH 正在启动…"
+        case .exited(let pid):
+            return "DSH 服务已退出（pid \(pid)），可在菜单里重启"
         case .failed(let reason):
             return "DSH 启动失败：\(reason)"
         case .idle:
@@ -145,6 +147,7 @@ final class MenuBar: NSObject, NSMenuDelegate {
             return "运行中 · 端口 \(config.port)\(owner)"
         case .starting: return "正在启动服务…"
         case .waitingPort: return "等待服务就绪…"
+        case .exited(let pid): return "服务已退出（pid \(pid)）"
         case .failed(let reason): return "启动失败：\(reason)"
         case .idle: return "DSH 未运行"
         }
