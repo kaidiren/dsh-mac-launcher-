@@ -166,25 +166,107 @@ struct LauncherConfig {
         return config
     }
 
-    /// 猜一个可用的 dsh 路径：优先当前 PATH，其次常见的 nvm 安装位置。
+    /// 猜一个可用的 dsh 路径。
+    ///
+    /// 顺序（越靠前越可信）：
+    ///   1. nvm 的 `default` alias —— 用户执行 `nvm alias default v26` 就是在表达
+    ///      "我当前想用哪个 node"；机器上可能并存几个装了 dsh 的版本，只有它算得准；
+    ///   2. nvm 版本目录里**语义版本最高**且装了 dsh 的那个；
+    ///   3. 系统级安装（Homebrew 等）；
+    ///   4. 最后交给 PATH 解析。
+    ///
+    /// 这里**绝不能写死任何版本号**。`dsh` 的入口是 `#!/usr/bin/env node` 的脚本，
+    /// 选中哪份 dsh 就等于选中那个版本的 node；写死 `v24.6.0` 会让
+    /// `nvm alias default` 的切换对启动器完全失效（2026-10-23 升 v26 时踩过）。
     private static func defaultDshBin() -> String {
-        let candidates = [
-            "/opt/homebrew/bin/dsh",
-            "/usr/local/bin/dsh",
-            "\(homeDirectory)/.nvm/versions/node/v24.6.0/bin/dsh",
-        ]
-        for path in candidates where FileManager.default.isExecutableFile(atPath: path) {
+        if let fromAlias = nvmDefaultAliasDshBin() { return fromAlias }
+        if let highest = highestVersionDshBin() { return highest }
+        for path in ["/opt/homebrew/bin/dsh", "/usr/local/bin/dsh"]
+        where FileManager.default.isExecutableFile(atPath: path) {
             return path
         }
-        // 扫一遍 nvm 下所有 node 版本，取第一个有 dsh 的（新版本优先）
-        let nvmRoot = "\(homeDirectory)/.nvm/versions/node"
-        if let versions = try? FileManager.default.contentsOfDirectory(atPath: nvmRoot) {
-            for version in versions.sorted(by: >) {
-                let path = "\(nvmRoot)/\(version)/bin/dsh"
-                if FileManager.default.isExecutableFile(atPath: path) { return path }
-            }
-        }
         return "dsh"   // 交给 PATH 解析，失败时给出可读错误
+    }
+
+    // MARK: - nvm 版本解析
+    //
+    // 目标只有一个：让"用哪个 node 跑 dsh"始终等于用户 nvm 的意图，且对版本号
+    // 变化免疫。所有比较都按语义版本（v9 < v10），不用字符串序。
+
+    /// nvm 的 node 安装根目录。
+    private static var nvmVersionsRoot: String { "\(homeDirectory)/.nvm/versions/node" }
+
+    /// 把 `v26.12.1` 解析成可比较的版本；不是版本目录名的返回 nil。
+    private static func parseNVMVersion(_ name: String) -> (major: Int, minor: Int, patch: Int)? {
+        guard name.hasPrefix("v") else { return nil }
+        let parts = name.dropFirst().split(separator: ".")
+        guard let major = parts.first.flatMap({ Int($0) }) else { return nil }
+        let minor = parts.count > 1 ? (Int(parts[1]) ?? 0) : 0
+        let patch = parts.count > 2 ? (Int(parts[2]) ?? 0) : 0
+        return (major, minor, patch)
+    }
+
+    /// 已安装的 node 版本目录名，按语义版本**降序**（最高版本在前）。
+    private static func nvmVersionsDescending() -> [String] {
+        guard let names = try? FileManager.default.contentsOfDirectory(atPath: nvmVersionsRoot) else {
+            return []
+        }
+        return names
+            .filter { parseNVMVersion($0) != nil }
+            .sorted { lhs, rhs in
+                guard let l = parseNVMVersion(lhs), let r = parseNVMVersion(rhs) else { return false }
+                if l.major != r.major { return l.major > r.major }
+                if l.minor != r.minor { return l.minor > r.minor }
+                return l.patch > r.patch
+            }
+    }
+
+    /// `~/.nvm/alias/default` 指向的具体版本目录名（如 `v26.12.1`）。
+    ///
+    /// 别名文件里可能是主版本别名 `v26`、完整版本 `v26.12.1`，也可能指向另一个
+    /// 别名（`lts/*` 这类）。前两种解析成实际目录；其余形态返回 nil，由调用方
+    /// 回落到"取最高版本"—— 去追别名链更容易猜错。
+    private static func nvmDefaultAliasVersion(_ versions: [String]) -> String? {
+        let aliasPath = "\(homeDirectory)/.nvm/alias/default"
+        guard let raw = try? String(contentsOfFile: aliasPath, encoding: .utf8) else { return nil }
+        let alias = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard alias.hasPrefix("v") else { return nil }
+        if versions.contains(alias) { return alias }
+        guard let major = parseNVMVersion(alias)?.major else { return nil }
+        // 主版本别名（如 v26）→ 该主版本里最高的那个
+        return versions.first { parseNVMVersion($0)?.major == major }
+    }
+
+    /// default alias 指向的版本里的 dsh（该版本没装 dsh 则 nil）。
+    private static func nvmDefaultAliasDshBin() -> String? {
+        let versions = nvmVersionsDescending()
+        guard let version = nvmDefaultAliasVersion(versions) else { return nil }
+        let bin = "\(nvmVersionsRoot)/\(version)/bin/dsh"
+        return FileManager.default.isExecutableFile(atPath: bin) ? bin : nil
+    }
+
+    /// 装了 dsh 的最高版本（按语义版本）。
+    private static func highestVersionDshBin() -> String? {
+        for version in nvmVersionsDescending() {
+            let bin = "\(nvmVersionsRoot)/\(version)/bin/dsh"
+            if FileManager.default.isExecutableFile(atPath: bin) { return bin }
+        }
+        return nil
+    }
+
+    /// nvm 下各 node 的 `bin` 目录，按"应优先用哪个"排好序：
+    /// default alias 指向的版本最前，其余按语义版本降序。
+    ///
+    /// 给子进程的 PATH 用：`dsh` 是 `#!/usr/bin/env node` 的脚本，PATH 里排第一的
+    /// node 才是真正执行它的那个 —— 必须和 dshBin 同源，否则会出现"加载某版本的
+    /// dsh 模块、却用另一个版本的 node 执行"的错配。
+    static func nvmBinDirectoriesForPATH() -> [String] {
+        let versions = nvmVersionsDescending()
+        let preferred = nvmDefaultAliasVersion(versions)
+        var ordered: [String] = []
+        if let preferred = preferred { ordered.append(preferred) }
+        ordered.append(contentsOf: versions.filter { $0 != preferred })
+        return ordered.map { "\(nvmVersionsRoot)/\($0)/bin" }
     }
 
     /// 极简 YAML 读取：只认顶层的 `key: value`，够用且不引入依赖。

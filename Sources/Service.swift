@@ -590,15 +590,26 @@ final class ServiceController {
     // MARK: - 环境
 
     /// 给子进程的 PATH：Finder/Dock 启动的进程 PATH 极简，必须补上 nvm 的 node/dsh。
+    ///
+    /// 顺序很重要：`dsh` 的入口是 `#!/usr/bin/env node` 的脚本，PATH 里第一个 node
+    /// 决定它跑在哪个版本上。nvm 侧的顺序要与 dshBin 的选择同源（default alias 优先、
+    /// 其余按语义版本降序），并且要排在 Homebrew / 系统目录之前 —— 否则会出现
+    /// "加载某版本的 dsh 模块、却用另一个版本的 node 执行"的错配。
     private static func childEnvironment(binaryPath: String) -> [String: String] {
         var env = ProcessInfo.processInfo.environment
         let binaryDir = (binaryPath as NSString).deletingLastPathComponent
-        let nvmBin = "\(NSHomeDirectory())/.nvm/versions/node"
-        var paths = [binaryDir, "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin", "/usr/sbin", "/sbin"]
-        if let versions = try? FileManager.default.contentsOfDirectory(atPath: nvmBin) {
-            for version in versions.sorted(by: >) {
-                paths.append("\(nvmBin)/\(version)/bin")
-            }
+
+        var candidates: [String] = [binaryDir]
+        candidates.append(contentsOf: LauncherConfig.nvmBinDirectoriesForPATH())
+        candidates.append(contentsOf: [
+            "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin", "/usr/sbin", "/sbin",
+        ])
+
+        // 去重：binaryDir 本身就是某个版本的 bin，通常会和上面的列表重复。
+        var seen: Set<String> = []
+        var paths: [String] = []
+        for dir in candidates where seen.insert(dir).inserted {
+            paths.append(dir)
         }
         if let existing = env["PATH"], !existing.isEmpty { paths.append(existing) }
         env["PATH"] = paths.joined(separator: ":")

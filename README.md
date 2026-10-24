@@ -19,6 +19,14 @@
   本应用只是它的 GUI 宿主，不含 DSH 本身。装好后 `dsh --version` 应能正常输出；
   若不在默认位置，用 `DSH_BIN` 指定
 
+用 nvm 管理 node 时**不需要**手动指定 `DSH_BIN`：启动器按 `~/.nvm/alias/default`
+找对应版本的 `dsh`（`nvm alias default v26` 就跟着切到 v26）；没有该别名时取
+nvm 里语义版本最高的那个。所以升级 node 后只要在新版本里装了 dsh（`npm i -g
+@deepseek-ai/dsh`），重启启动器即可，不用改配置。`dsh` 的入口是
+`#!/usr/bin/env node` 脚本，启动器同时会把该版本目录放到子进程 `PATH` 首位，
+保证"跑 dsh 的 node"与"被选中的 dsh"是同一个版本 —— 只改一半就会出现
+"加载 v26 的 dsh 模块、却用 v24 的 node 执行"的错配。
+
 ## 安装
 
 ```sh
@@ -87,7 +95,7 @@ DSHLauncher --self-test-close     # 关掉窗口，验证「关窗不退出应�
 | 变量 | 默认 | 说明 |
 |---|---|---|
 | `DSH_WEB_PORT` | `3080` | 服务端口 |
-| `DSH_BIN` | 自动探测 | `dsh` 可执行文件路径 |
+| `DSH_BIN` | 自动探测 | `dsh` 可执行文件路径；留空时跟随 `~/.nvm/alias/default` |
 | `DSH_WORKDIR` | `~` | `dsh web` 的工作目录（决定 GUI 会话的起始目录） |
 | `DSH_WINDOW_MODE` | `maximized` | `maximized` 占满屏幕 \| `custom` |
 | `DSH_WINDOW_WIDTH` / `HEIGHT` | `1180` / `800` | 仅 `custom` 模式 |
